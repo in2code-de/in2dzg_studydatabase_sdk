@@ -1,0 +1,12 @@
+# files that the openapi-generator must not touch or generate
+
+# handled manually
+composer.json
+.gitignore
+docs/openapi-generator/Index.md
+
+# not needed
+.travis.yml
+git_push.sh
+phpunit.xml.dist
+test/**

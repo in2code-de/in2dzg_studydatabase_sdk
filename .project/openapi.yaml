@@ -1,0 +1,1162 @@
+openapi: 3.1.0
+
+info:
+  title: Studienportal Datenbank API
+  version: '1.0.0'
+  description: |
+    Read-only JSON interface of the cross-disease study portal.
+
+    All endpoints live below `/api/v1/` and are public; no authentication is required. The API is
+    strictly read-only.
+
+    **Use cases:** The central study portal, the decentralised portals of the centers and further
+    applications (e.g. apps) query the studies independently of platform and CMS, for example all
+    studies of an illness area that are open for recruitment (see the example at `GET /study/list`),
+    a single study by id, or the selection lists and reference data needed to build a filter form.
+
+    **Language:** The content language is chosen with the `Accept-Language` header
+    (e.g. `en`, `en-US` or `de;q=0.5, en`). German and English are supported; without a matching
+    language, German is delivered. The delivered language is stated in the `Content-Language`
+    header.
+
+    **Studies** are only delivered while they are published and their study period is running:
+    before the study start and from the study end on they are missing from lists, and the detail
+    endpoint answers with 404. Studies without a start or end are not restricted. Start and end
+    apply at minute precision: a study ending at 10:00:30 is no longer delivered from 10:01:00 on.
+
+    **Lists** are paginated (`pagination[page]`, `pagination[itemsPerPage]`, at most 100), can be
+    narrowed with `filter[...]` and sorted with `orderings[<field>]=asc|desc`, e.g.
+    `/study/list?orderings[start]=desc&pagination[itemsPerPage]=10`; without `orderings` they are
+    sorted by id. Unknown filters, ordering fields, pagination keys or invalid values are answered
+    with 400, as is any other unknown query parameter. Texts are sorted by their value in the
+    delivered language.
+
+    **Rate limit:** Each client IP may send 100 requests per minute across all endpoints
+    (sliding window). Beyond that, the API answers with 429 and states the seconds until the next
+    allowed request in the `Retry-After` header.
+
+    **Errors** are always delivered as JSON in the format `{"error": {"status", "message", "details"}}`:
+    400 for invalid parameters (`details` lists every violation), 404 for an unknown endpoint or
+    record, 405 for any method other than `GET`, 429 when the rate limit is exceeded and 500 for an
+    internal error, without technical details.
+
+    **Best practices**
+    - *Usage:* Ids are language-independent. The uids for the study filters are provided by the
+      selection list and reference data endpoints; never hardcode uids in the client, look them up
+      there instead.
+    - *Performance:* Only fetch as many items per page as are displayed, and store responses with
+      their `ETag` and revalidate them via `If-None-Match` – a `304` has no body but still counts
+      towards the rate limit. Selection lists and reference data change rarely.
+    - *Limits:* At most 100 items per page and 100 requests per minute per IP. Fetch large amounts
+      of data page by page with pauses, and on 429 wait for `Retry-After` instead of retrying
+      immediately.
+    - *Security:* The API only delivers published data intended for display. HTML-escape texts
+      such as descriptions or criteria in the client before output.
+  contact:
+    name: in2code GmbH
+    url: https://www.in2code.de
+  license:
+    name: GPL-2.0-or-later
+    identifier: GPL-2.0-or-later
+
+servers:
+  - url: /api/v1
+    description: Host serving this specification
+
+tags:
+  - name: Studies
+    description: Studies of the database, list and detail view
+  - name: Reference data
+    description: Illnesses, study centers and predefined criteria for the portal's filters
+  - name: Selection lists
+    description: |
+      Selection lists of a study, e.g. study type, design or recruiting state. Their uids are used
+      in the study filters (`filter[type]`, `filter[phase]` …).
+
+paths:
+  /study/list:
+    get:
+      tags: [Studies]
+      summary: List studies
+      description: |
+        Returns the visible studies, sorted by id without `orderings`. All filters are combined
+        with AND; several uids within one filter with OR.
+
+        Prefilled is the example "all open diabetes studies, 10 per page, by study start
+        descending":
+        `/study/list?filter[illnessAreas]=5&filter[recruitingState]=11&orderings[start]=desc&pagination[page]=1&pagination[itemsPerPage]=10`.
+        The uids (illness area "Diabetes & Stoffwechsel", recruiting state "Teilnehmende
+        gesucht") come from `GET /study/category/illnessArea` and `GET /study/category/recruitingState`.
+      operationId: listStudies
+      parameters:
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/Pagination'
+        - $ref: '#/components/parameters/StudyOrderings'
+        - name: filter[search]
+          in: query
+          description: |
+            Full-text search in readable and original title, goal, short description, placebo
+            description, search words, illness suggestion and intervention description
+          schema: { type: string }
+        - name: filter[illnessAreas]
+          in: query
+          description: |
+            Uids of illness areas, as a comma-separated list (`1,2`) or as an array
+            (`filter[illnessAreas][]=1&filter[illnessAreas][]=2`). A study matches as soon as one of
+            the areas is assigned to it as its area or as a further affected area.
+          schema: { $ref: '#/components/schemas/UidList' }
+          example: '5'
+        - name: filter[illnessIndications]
+          in: query
+          description: |
+            Uids of illnesses, as a comma-separated list or as an array. A study matches as soon as
+            it is assigned to at least one of the illnesses.
+          schema: { $ref: '#/components/schemas/UidList' }
+        - name: filter[type]
+          in: query
+          description: Uid of the study type category
+          schema: { type: integer, minimum: 1 }
+        - name: filter[phase]
+          in: query
+          description: Uid of the study phase
+          schema: { type: integer, minimum: 1 }
+        - name: filter[interventionType]
+          in: query
+          description: Uid of the intervention category
+          schema: { type: integer, minimum: 1 }
+        - name: filter[recruitingState]
+          in: query
+          description: Uid of the recruiting state category
+          schema: { type: integer, minimum: 1 }
+          example: 11
+        - name: filter[studyCenters]
+          in: query
+          description: |
+            Uids of study centers from `GET /study-center/list`, as a comma-separated list or as an
+            array. A study matches as soon as it is conducted at at least one of the centers, e.g.
+            for a portal showing the studies of its own institution.
+          schema: { $ref: '#/components/schemas/UidList' }
+      responses:
+        '200':
+          description: Result list
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Cache-Control: { $ref: '#/components/headers/CacheControl' }
+            Content-Language: { $ref: '#/components/headers/ContentLanguage' }
+            Vary: { $ref: '#/components/headers/Vary' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudyCollection' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /study/{uid}:
+    get:
+      tags: [Studies]
+      summary: Study details
+      operationId: getStudy
+      parameters:
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - name: uid
+          in: path
+          required: true
+          description: Uid of the study record
+          schema: { type: integer, minimum: 1 }
+          example: 1
+      responses:
+        '200':
+          description: The study with all details
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Cache-Control: { $ref: '#/components/headers/CacheControl' }
+            Content-Language: { $ref: '#/components/headers/ContentLanguage' }
+            Vary: { $ref: '#/components/headers/Vary' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Study' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /illness/list:
+    get:
+      tags: [Reference data]
+      summary: List illnesses
+      description: Illnesses with their illness areas, sorted by id without `orderings`.
+      operationId: listIllnesses
+      parameters:
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/Pagination'
+        - $ref: '#/components/parameters/IllnessOrderings'
+        - name: filter[search]
+          in: query
+          description: Full-text search in name, synonyms, ICD-10 and SNOMED code
+          schema: { type: string }
+          example: Zucker
+        - name: filter[area]
+          in: query
+          description: Uid of an illness area the illness is assigned to
+          schema: { type: integer, minimum: 1 }
+          example: 1
+      responses:
+        '200':
+          description: Result list
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Cache-Control: { $ref: '#/components/headers/CacheControl' }
+            Content-Language: { $ref: '#/components/headers/ContentLanguage' }
+            Vary: { $ref: '#/components/headers/Vary' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IllnessCollection' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /study-center/list:
+    get:
+      tags: [Reference data]
+      summary: List study centers
+      description: Study centers, sorted by id without `orderings`.
+      operationId: listStudyCenters
+      parameters:
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/Pagination'
+        - $ref: '#/components/parameters/StudyCenterOrderings'
+        - name: filter[search]
+          in: query
+          description: Full-text search in name, address, postal code, city, region, phone, fax, email and website
+          schema: { type: string }
+          example: Berlin
+      responses:
+        '200':
+          description: Result list
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Cache-Control: { $ref: '#/components/headers/CacheControl' }
+            Content-Language: { $ref: '#/components/headers/ContentLanguage' }
+            Vary: { $ref: '#/components/headers/Vary' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudyCenterCollection' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /study/category/{type}:
+    get:
+      tags: [Selection lists]
+      summary: Entries of a selection list
+      description: Categories of a selection list, sorted by id without `orderings`. An unknown or unconfigured type results in 404.
+      operationId: listStudyCategories
+      parameters:
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/CategoryType'
+        - $ref: '#/components/parameters/Pagination'
+        - $ref: '#/components/parameters/CategoryOrderings'
+        - $ref: '#/components/parameters/CategorySearch'
+      responses:
+        '200':
+          description: Result list
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Cache-Control: { $ref: '#/components/headers/CacheControl' }
+            Content-Language: { $ref: '#/components/headers/ContentLanguage' }
+            Vary: { $ref: '#/components/headers/Vary' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CategoryCollection' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /study/category/{type}/{uid}:
+    get:
+      tags: [Selection lists]
+      summary: Single entry of a selection list
+      description: If the category does not belong to the requested type, the API answers with 404.
+      operationId: getStudyCategory
+      parameters:
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/CategoryType'
+        - name: uid
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+          example: 2
+      responses:
+        '200':
+          description: The selection list entry
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Cache-Control: { $ref: '#/components/headers/CacheControl' }
+            Content-Language: { $ref: '#/components/headers/ContentLanguage' }
+            Vary: { $ref: '#/components/headers/Vary' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Category' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /study/category/phase:
+    get:
+      tags: [Selection lists]
+      summary: Study phases
+      description: Study phases with explanatory text, sorted by id without `orderings`. Searches name and explanatory text.
+      operationId: listPhases
+      parameters:
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/Pagination'
+        - $ref: '#/components/parameters/NameOrderings'
+        - $ref: '#/components/parameters/CategorySearch'
+      responses:
+        '200':
+          description: Result list
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Cache-Control: { $ref: '#/components/headers/CacheControl' }
+            Content-Language: { $ref: '#/components/headers/ContentLanguage' }
+            Vary: { $ref: '#/components/headers/Vary' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PhaseCollection' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /study/category/phase/{uid}:
+    get:
+      tags: [Selection lists]
+      summary: Single study phase
+      description: Study phase with explanatory text.
+      operationId: getPhase
+      parameters:
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - name: uid
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+          example: 1
+      responses:
+        '200':
+          description: The selection list entry
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Cache-Control: { $ref: '#/components/headers/CacheControl' }
+            Content-Language: { $ref: '#/components/headers/ContentLanguage' }
+            Vary: { $ref: '#/components/headers/Vary' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Phase' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /study/category/illnessArea:
+    get:
+      tags: [Selection lists]
+      summary: Illness areas
+      description: Illness areas, sorted by id without `orderings`. Searches the name.
+      operationId: listIllnessAreas
+      parameters:
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/Pagination'
+        - $ref: '#/components/parameters/NameOrderings'
+        - $ref: '#/components/parameters/CategorySearch'
+      responses:
+        '200':
+          description: Result list
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Cache-Control: { $ref: '#/components/headers/CacheControl' }
+            Content-Language: { $ref: '#/components/headers/ContentLanguage' }
+            Vary: { $ref: '#/components/headers/Vary' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IllnessAreaCollection' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /study/category/illnessArea/{uid}:
+    get:
+      tags: [Selection lists]
+      summary: Single illness area
+      description: Illness area with icon.
+      operationId: getIllnessArea
+      parameters:
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - name: uid
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+          example: 1
+      responses:
+        '200':
+          description: The selection list entry
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Cache-Control: { $ref: '#/components/headers/CacheControl' }
+            Content-Language: { $ref: '#/components/headers/ContentLanguage' }
+            Vary: { $ref: '#/components/headers/Vary' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IllnessArea' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+components:
+  parameters:
+    AcceptLanguage:
+      name: Accept-Language
+      in: header
+      description: |
+        Preferred language according to RFC 9110, weights allowed (`de;q=0.5, en`). Regions are
+        reduced to the language (`en-GB` delivers `en-US`). Without a matching language, German.
+      schema: { type: string }
+      example: en
+    CategoryType:
+      name: type
+      in: path
+      required: true
+      description: Selection list of the study. Phases and illness areas have their own endpoints.
+      schema:
+        type: string
+        enum: [type, design, interventionType, exams, support, recruitingState, financing, communicationWay]
+      example: type
+    CategorySearch:
+      name: filter[search]
+      in: query
+      description: Full-text search in the title or name
+      schema: { type: string }
+    StudyOrderings:
+      name: orderings
+      in: query
+      style: deepObject
+      explode: true
+      description: |
+        Sorting as `orderings[<field>]=asc|desc`, several fields in the order of the request
+        (`orderings[readableTitle]=desc&orderings[updated]=asc`). Ties are broken by id.
+        Unknown fields or directions result in 400.
+
+        `start`/`end` are study start and end (`period`), `created`/`updated` the creation and last
+        modification of the record. Studies without a date have the value 0 and come first when
+        sorting ascending.
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          readableTitle: { $ref: '#/components/schemas/OrderingDirection' }
+          originalTitle: { $ref: '#/components/schemas/OrderingDirection' }
+          start: { $ref: '#/components/schemas/OrderingDirection' }
+          end: { $ref: '#/components/schemas/OrderingDirection' }
+          created: { $ref: '#/components/schemas/OrderingDirection' }
+          updated: { $ref: '#/components/schemas/OrderingDirection' }
+      example: { start: desc }
+    IllnessOrderings:
+      name: orderings
+      in: query
+      style: deepObject
+      explode: true
+      description: |
+        Sorting as `orderings[<field>]=asc|desc`, several fields in the order of the request
+        (`orderings[name]=desc&orderings[snomedCode]=asc`). Ties are broken by id.
+        Unknown fields or directions result in 400.
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          name: { $ref: '#/components/schemas/OrderingDirection' }
+          icd10Code: { $ref: '#/components/schemas/OrderingDirection' }
+          snomedCode: { $ref: '#/components/schemas/OrderingDirection' }
+      example: { name: asc }
+    StudyCenterOrderings:
+      name: orderings
+      in: query
+      style: deepObject
+      explode: true
+      description: |
+        Sorting as `orderings[<field>]=asc|desc`, several fields in the order of the request
+        (`orderings[name]=desc&orderings[region]=asc`). Ties are broken by id.
+        Unknown fields or directions result in 400.
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          name: { $ref: '#/components/schemas/OrderingDirection' }
+          zip: { $ref: '#/components/schemas/OrderingDirection' }
+          city: { $ref: '#/components/schemas/OrderingDirection' }
+          region: { $ref: '#/components/schemas/OrderingDirection' }
+      example: { zip: asc }
+    CategoryOrderings:
+      name: orderings
+      in: query
+      style: deepObject
+      explode: true
+      description: |
+        Sorting as `orderings[title]=asc|desc`. Ties are broken by id.
+        Unknown fields or directions result in 400.
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          title: { $ref: '#/components/schemas/OrderingDirection' }
+      example: { title: asc }
+    NameOrderings:
+      name: orderings
+      in: query
+      style: deepObject
+      explode: true
+      description: |
+        Sorting as `orderings[name]=asc|desc`. Ties are broken by id.
+        Unknown fields or directions result in 400.
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          name: { $ref: '#/components/schemas/OrderingDirection' }
+      example: { name: asc }
+    Pagination:
+      name: pagination
+      in: query
+      style: deepObject
+      explode: true
+      description: |
+        Pagination as `pagination[page]` (page number from 1) and `pagination[itemsPerPage]` (items
+        per page, 1 to 100). An empty value counts as not set. Other keys, a non-integer or a value
+        out of range result in 400.
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          page: { type: integer, minimum: 1, default: 1 }
+          itemsPerPage: { type: integer, minimum: 1, maximum: 100, default: 25 }
+      example: { page: 1, itemsPerPage: 10 }
+
+  headers:
+    ETag:
+      description: |
+        Hash of the response body. If it is sent as `If-None-Match` in a subsequent request and
+        nothing has changed, the API answers with `304` without a body.
+      schema: { type: string }
+      example: '"7b52009b64fd0a2a49e6d8a939753077792b0554"'
+    CacheControl:
+      description: |
+        Always `private, max-age=0, must-revalidate`: clients may store the response but have to
+        revalidate it via `If-None-Match`.
+      schema: { type: string }
+      example: private, max-age=0, must-revalidate
+    ContentLanguage:
+      description: Language of the delivered content as a BCP 47 tag
+      schema: { type: string, enum: [de-DE, en-US] }
+      example: de-DE
+    Vary:
+      description: The response depends on the `Accept-Language` header.
+      schema: { type: string }
+      example: Accept-Language
+
+  responses:
+    NotModified:
+      description: Unchanged since the ETag sent in `If-None-Match`, no response body.
+      headers:
+        ETag: { $ref: '#/components/headers/ETag' }
+        Cache-Control: { $ref: '#/components/headers/CacheControl' }
+        Content-Language: { $ref: '#/components/headers/ContentLanguage' }
+        Vary: { $ref: '#/components/headers/Vary' }
+    BadRequest:
+      description: |
+        A filter is unknown or its value is not a valid uid (integer from 1) or not a text
+        (`Invalid filter.`), an ordering field or direction is unknown (`Invalid orderings.`), or a
+        pagination key is unknown, not an integer or out of the allowed range
+        (`Invalid pagination.`). An unknown key is an error even with an empty value. `details`
+        lists all violations of the parameter at once, with `value` if the rejected value is
+        scalar.
+
+        A query parameter the API does not know at all (e.g. `?page=2` instead of
+        `?pagination[page]=2`) results in `Unknown request parameters` without `details`.
+      headers:
+        Content-Language: { $ref: '#/components/headers/ContentLanguage' }
+        Vary: { $ref: '#/components/headers/Vary' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error:
+              status: 400
+              message: Invalid filter.
+              details:
+                - parameter: filter[typ]
+                  message: Unknown filter
+                  value: '3'
+                  allowed: [search, illnessAreas, illnessIndications, type, phase, interventionType, recruitingState, studyCenters]
+                - parameter: filter[phase]
+                  message: Expected a record uid
+                  value: phase_2
+    NotFound:
+      description: The requested record or endpoint does not exist.
+      headers:
+        Content-Language: { $ref: '#/components/headers/ContentLanguage' }
+        Vary: { $ref: '#/components/headers/Vary' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { status: 404, message: '/api/v1/study/{uid}: Study 999 not found.' }
+    MethodNotAllowed:
+      description: The API is read-only, only `GET` is allowed.
+      headers:
+        Content-Language: { $ref: '#/components/headers/ContentLanguage' }
+        Vary: { $ref: '#/components/headers/Vary' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { status: 405, message: 'Invalid HTTP method: POST' }
+    TooManyRequests:
+      description: |
+        The request limit of the client IP is exhausted. It applies to all endpoints combined;
+        `Retry-After` states the seconds until the next allowed request.
+      headers:
+        Retry-After:
+          description: Seconds until the next allowed request
+          schema: { type: integer, minimum: 0 }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { status: 429, message: Too Many Requests }
+
+  schemas:
+    UidList:
+      description: Uids as a comma-separated list or as an array
+      oneOf:
+        - type: string
+        - type: array
+          items: { type: integer, minimum: 1 }
+
+    CriterionType:
+      type: string
+      enum: [inclusion, exclusion]
+    DurationUnit:
+      type: string
+      enum: [weeks, months]
+    Gender:
+      type: string
+      enum: [all, female, male]
+    Placebo:
+      type: string
+      enum: ['yes', 'no', not_applicable]
+    RegisterIdType:
+      type: string
+      enum: [drks, nct, nfdi4health]
+
+    OrderingDirection:
+      type: string
+      enum: [asc, desc]
+    Orderings:
+      type: array
+      description: |
+        Applied sorting in the order of the request. Empty if the endpoint's default sorting
+        applies.
+      items:
+        type: object
+        additionalProperties: false
+        required: [field, direction]
+        properties:
+          field: { type: string }
+          direction: { $ref: '#/components/schemas/OrderingDirection' }
+
+    Pagination:
+      type: object
+      additionalProperties: false
+      required: [page, itemsPerPage, totalItems, totalPages]
+      properties:
+        page: { type: integer, minimum: 1, description: Delivered page }
+        itemsPerPage: { type: integer, minimum: 1, maximum: 100, description: Page size }
+        totalItems: { type: integer, minimum: 0, description: Items across all pages }
+        totalPages: { type: integer, minimum: 0, description: 'Number of pages, 0 for an empty result list' }
+
+    StudyFilter:
+      type: object
+      additionalProperties: false
+      description: Evaluation of the passed filters. It shows a client how its request was understood.
+      required: [search, illnessAreas, illnessIndications, type, phase, interventionType, recruitingState, studyCenters]
+      properties:
+        search: { type: string }
+        illnessAreas:
+          type: array
+          items: { type: integer, minimum: 1 }
+        illnessIndications:
+          type: array
+          items: { type: integer, minimum: 1 }
+        type: { type: [integer, 'null'] }
+        phase: { type: [integer, 'null'] }
+        interventionType: { type: [integer, 'null'] }
+        recruitingState: { type: [integer, 'null'] }
+        studyCenters:
+          type: array
+          items: { type: integer, minimum: 1 }
+    IllnessFilter:
+      type: object
+      additionalProperties: false
+      required: [search, area]
+      properties:
+        search: { type: string }
+        area: { type: [integer, 'null'] }
+    StudyCenterFilter:
+      type: object
+      additionalProperties: false
+      required: [search]
+      properties:
+        search: { type: string }
+    CategoryFilter:
+      type: object
+      additionalProperties: false
+      required: [search]
+      properties:
+        search: { type: string }
+
+    Category:
+      type: object
+      additionalProperties: false
+      description: Category from `sys_category`, such as study type, design or recruiting state
+      required: [id, title]
+      properties:
+        id: { type: integer }
+        title: { type: string }
+
+    Phase:
+      type: object
+      additionalProperties: false
+      required: [id, name, description]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        description: { type: string }
+
+    RegisterId:
+      type: object
+      additionalProperties: false
+      required: [id, type]
+      properties:
+        id: { type: string, description: 'Identifier in the register, e.g. NCT00000001' }
+        type: { $ref: '#/components/schemas/RegisterIdType' }
+
+    IllnessArea:
+      type: object
+      additionalProperties: false
+      required: [id, name, icon]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        icon: { type: [string, 'null'], description: 'Public URL of the icon, `null` without an icon' }
+
+    Illness:
+      type: object
+      additionalProperties: false
+      required: [id, name, icd10Code, snomedCode, areas, synonyms]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        icd10Code: { type: string }
+        snomedCode: { type: string }
+        areas:
+          type: array
+          items: { $ref: '#/components/schemas/IllnessArea' }
+        synonyms:
+          type: array
+          description: Synonyms, maintained one per line
+          items: { type: string }
+
+    StudyCenter:
+      type: object
+      additionalProperties: false
+      required: [id, name, address, zip, city, region, latitude, longitude]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        address: { type: string }
+        zip: { type: string }
+        city: { type: string }
+        region: { type: string }
+        latitude:
+          type: [string, 'null']
+          description: '`null` if no coordinates are maintained'
+        longitude:
+          type: [string, 'null']
+          description: '`null` if no coordinates are maintained'
+
+    StudyCenterAssignment:
+      type: object
+      additionalProperties: false
+      description: A study center in the context of a study
+      required: [id, studyCenter, recruitingState]
+      properties:
+        id: { type: integer }
+        studyCenter: { oneOf: [{ $ref: '#/components/schemas/StudyCenter' }, { type: 'null' }] }
+        recruitingState:
+          oneOf: [{ $ref: '#/components/schemas/Category' }, { type: 'null' }]
+          description: |
+            Recruiting state of this center. `null` if it does not differ from the study's state –
+            then the study's `recruitingState` applies.
+
+    Criterion:
+      type: object
+      additionalProperties: false
+      required: [id, text, type]
+      properties:
+        id: { type: integer }
+        text: { type: string }
+        type: { $ref: '#/components/schemas/CriterionType' }
+
+    Contact:
+      type: object
+      additionalProperties: false
+      required: [id, function, name, institution, email, phone, availability, languages]
+      properties:
+        id: { type: integer }
+        function: { type: string, description: Role in the study }
+        name: { type: string }
+        institution: { type: string }
+        email: { type: string }
+        phone: { type: string }
+        availability: { type: string, description: When the contact can be reached }
+        languages: { type: string }
+
+    StudyListPeriod:
+      type: object
+      additionalProperties: false
+      required: [start, end, duration, durationUnit]
+      properties:
+        start: { type: [string, 'null'], format: date, description: Study start }
+        end: { type: [string, 'null'], format: date, description: 'Study end; from this day on the study is no longer delivered' }
+        duration: { type: integer, minimum: 0, description: 'Duration of participation, 0 = not specified' }
+        durationUnit: { $ref: '#/components/schemas/DurationUnit' }
+    StudyPeriod:
+      type: object
+      additionalProperties: false
+      description: Like `StudyListPeriod`, plus the appointments
+      required: [start, end, duration, durationUnit, numberOfEventsLocation, numberOfEventsDigital, numberOfEventsPhone, totalNumberOfEvents]
+      properties:
+        start: { type: [string, 'null'], format: date, description: Study start }
+        end: { type: [string, 'null'], format: date, description: 'Study end; from this day on the study is no longer delivered' }
+        duration: { type: integer, minimum: 0, description: 'Duration of participation, 0 = not specified' }
+        durationUnit: { $ref: '#/components/schemas/DurationUnit' }
+        numberOfEventsLocation: { type: integer, minimum: 0, description: On-site appointments }
+        numberOfEventsDigital: { type: integer, minimum: 0, description: Digital appointments }
+        numberOfEventsPhone: { type: integer, minimum: 0, description: Phone appointments }
+        totalNumberOfEvents: { type: integer, minimum: 0, description: Total of all appointments }
+
+    StudyPlacebo:
+      type: object
+      additionalProperties: false
+      required: [type, description]
+      properties:
+        type: { oneOf: [{ $ref: '#/components/schemas/Placebo' }, { type: 'null' }] }
+        description: { type: string }
+
+    StudyIllness:
+      type: object
+      additionalProperties: false
+      required: [illness, area, furtherAffectedAreas]
+      properties:
+        illness:
+          type: array
+          description: Illnesses the study is intended for
+          items: { $ref: '#/components/schemas/Illness' }
+        area:
+          type: array
+          items: { $ref: '#/components/schemas/IllnessArea' }
+        furtherAffectedAreas:
+          type: array
+          items: { $ref: '#/components/schemas/IllnessArea' }
+
+    Eligibility:
+      type: object
+      additionalProperties: false
+      required:
+        - minAge
+        - maxAge
+        - gender
+        - healthyVolunteers
+        - inclusionCriteria
+        - exclusionCriteria
+        - predefinedInclusionCriteria
+        - predefinedExclusionCriteria
+      properties:
+        minAge: { type: [integer, 'null'] }
+        maxAge: { type: [integer, 'null'] }
+        gender: { $ref: '#/components/schemas/Gender' }
+        healthyVolunteers: { type: boolean, description: Healthy participants are also sought }
+        inclusionCriteria: { type: string, description: Free-text inclusion criteria }
+        exclusionCriteria: { type: string, description: Free-text exclusion criteria }
+        predefinedInclusionCriteria:
+          type: array
+          items: { $ref: '#/components/schemas/Criterion' }
+        predefinedExclusionCriteria:
+          type: array
+          items: { $ref: '#/components/schemas/Criterion' }
+
+    Funding:
+      type: object
+      additionalProperties: false
+      required: [support, supportText, sponsor, financing, financingName, managementName, managementInstitution]
+      properties:
+        support:
+          type: array
+          description: Support for participants
+          items: { $ref: '#/components/schemas/Category' }
+        supportText: { type: string }
+        sponsor: { type: string }
+        financing: { oneOf: [{ $ref: '#/components/schemas/Category' }, { type: 'null' }] }
+        financingName: { type: string }
+        managementName: { type: string, description: Principal investigator }
+        managementInstitution: { type: string }
+
+    Compliance:
+      type: object
+      additionalProperties: false
+      required:
+        - ethicalVotumAvailable
+        - ethicalComissionName
+        - ethicalVotumLink
+        - officialApproval
+        - ichGcpCompliant
+        - developedWithPatients
+        - developedWithPatientsExplanation
+      properties:
+        ethicalVotumAvailable: { type: boolean, description: Ethics committee approval is available }
+        ethicalComissionName: { type: string }
+        ethicalVotumLink: { type: string }
+        officialApproval: { type: boolean, description: Regulatory approval is available }
+        ichGcpCompliant: { type: boolean, description: Conducted according to ICH-GCP }
+        developedWithPatients: { type: boolean, description: Developed together with patients }
+        developedWithPatientsExplanation: { type: string }
+
+    Result:
+      type: object
+      additionalProperties: false
+      required: [summary, link, date]
+      properties:
+        summary: { type: string }
+        link: { type: string }
+        date: { type: [string, 'null'], format: date }
+
+    StudyListItem:
+      type: object
+      additionalProperties: false
+      description: Study in the result list — the subset of the detail data an overview needs.
+      required:
+        - id
+        - registerIds
+        - readableTitle
+        - originalTitle
+        - goal
+        - type
+        - phase
+        - illness
+        - recruitingState
+        - healthyVolunteers
+        - period
+        - studyCenters
+      properties:
+        id: { type: integer }
+        registerIds:
+          type: array
+          items: { $ref: '#/components/schemas/RegisterId' }
+        readableTitle: { type: string }
+        originalTitle: { type: string }
+        goal: { type: string, description: Goal of the study }
+        type: { oneOf: [{ $ref: '#/components/schemas/Category' }, { type: 'null' }] }
+        phase: { oneOf: [{ $ref: '#/components/schemas/Phase' }, { type: 'null' }] }
+        illness:
+          type: array
+          items: { $ref: '#/components/schemas/Illness' }
+        recruitingState: { oneOf: [{ $ref: '#/components/schemas/Category' }, { type: 'null' }] }
+        healthyVolunteers: { type: boolean }
+        period: { $ref: '#/components/schemas/StudyListPeriod' }
+        studyCenters:
+          type: array
+          items: { $ref: '#/components/schemas/StudyCenterAssignment' }
+
+    Study:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - registerIds
+        - readableTitle
+        - originalTitle
+        - goal
+        - description
+        - type
+        - phase
+        - designs
+        - placebo
+        - searchWords
+        - illness
+        - intervention
+        - interventionDescription
+        - eligibility
+        - period
+        - exams
+        - otherExams
+        - funding
+        - recruitingState
+        - studyCenters
+        - contacts
+        - communicationWay
+        - compliance
+        - image
+        - result
+      properties:
+        id: { type: integer }
+        registerIds:
+          type: array
+          items: { $ref: '#/components/schemas/RegisterId' }
+        readableTitle: { type: string }
+        originalTitle: { type: string }
+        goal: { type: string }
+        description: { type: string, description: Short description }
+        type: { oneOf: [{ $ref: '#/components/schemas/Category' }, { type: 'null' }] }
+        phase: { oneOf: [{ $ref: '#/components/schemas/Phase' }, { type: 'null' }] }
+        designs:
+          type: array
+          description: Study designs (multiple selection)
+          items: { $ref: '#/components/schemas/Category' }
+        placebo: { $ref: '#/components/schemas/StudyPlacebo' }
+        searchWords: { type: string }
+        illness: { $ref: '#/components/schemas/StudyIllness' }
+        intervention: { oneOf: [{ $ref: '#/components/schemas/Category' }, { type: 'null' }] }
+        interventionDescription: { type: string }
+        eligibility: { $ref: '#/components/schemas/Eligibility' }
+        period: { $ref: '#/components/schemas/StudyPeriod' }
+        exams:
+          type: array
+          items: { $ref: '#/components/schemas/Category' }
+        otherExams: { type: string }
+        funding: { $ref: '#/components/schemas/Funding' }
+        recruitingState: { oneOf: [{ $ref: '#/components/schemas/Category' }, { type: 'null' }] }
+        studyCenters:
+          type: array
+          items: { $ref: '#/components/schemas/StudyCenterAssignment' }
+        contacts:
+          type: array
+          items: { $ref: '#/components/schemas/Contact' }
+        communicationWay: { oneOf: [{ $ref: '#/components/schemas/Category' }, { type: 'null' }] }
+        compliance: { $ref: '#/components/schemas/Compliance' }
+        image: { type: [string, 'null'], description: 'Public URL of the image, `null` without an image' }
+        result: { $ref: '#/components/schemas/Result' }
+
+    StudyCollection:
+      type: object
+      additionalProperties: false
+      required: [studies, pagination, filter, orderings]
+      properties:
+        studies:
+          type: array
+          items: { $ref: '#/components/schemas/StudyListItem' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+        filter: { $ref: '#/components/schemas/StudyFilter' }
+        orderings: { $ref: '#/components/schemas/Orderings' }
+    IllnessCollection:
+      type: object
+      additionalProperties: false
+      required: [illnesses, pagination, filter, orderings]
+      properties:
+        illnesses:
+          type: array
+          items: { $ref: '#/components/schemas/Illness' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+        filter: { $ref: '#/components/schemas/IllnessFilter' }
+        orderings: { $ref: '#/components/schemas/Orderings' }
+    StudyCenterCollection:
+      type: object
+      additionalProperties: false
+      required: [studyCenters, pagination, filter, orderings]
+      properties:
+        studyCenters:
+          type: array
+          items: { $ref: '#/components/schemas/StudyCenter' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+        filter: { $ref: '#/components/schemas/StudyCenterFilter' }
+        orderings: { $ref: '#/components/schemas/Orderings' }
+    CategoryCollection:
+      type: object
+      additionalProperties: false
+      required: [categories, pagination, filter, orderings]
+      properties:
+        categories:
+          type: array
+          items: { $ref: '#/components/schemas/Category' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+        filter: { $ref: '#/components/schemas/CategoryFilter' }
+        orderings: { $ref: '#/components/schemas/Orderings' }
+    PhaseCollection:
+      type: object
+      additionalProperties: false
+      required: [categories, pagination, filter, orderings]
+      properties:
+        categories:
+          type: array
+          items: { $ref: '#/components/schemas/Phase' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+        filter: { $ref: '#/components/schemas/CategoryFilter' }
+        orderings: { $ref: '#/components/schemas/Orderings' }
+    IllnessAreaCollection:
+      type: object
+      additionalProperties: false
+      required: [categories, pagination, filter, orderings]
+      properties:
+        categories:
+          type: array
+          items: { $ref: '#/components/schemas/IllnessArea' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+        filter: { $ref: '#/components/schemas/CategoryFilter' }
+        orderings: { $ref: '#/components/schemas/Orderings' }
+
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [status, message]
+          properties:
+            status: { type: integer, description: Repeats the HTTP status code }
+            message: { type: string }
+            details:
+              type: array
+              description: Only for 400 — one violation of the request per entry.
+              items:
+                type: object
+                additionalProperties: false
+                required: [parameter, message]
+                properties:
+                  parameter: { type: string, example: 'filter[phase]' }
+                  message: { type: string, example: Expected a record uid }
+                  value: { type: string, description: 'The rejected value, if scalar' }
+                  allowed:
+                    type: array
+                    description: Allowed filters or allowed values
+                    items: { type: string }

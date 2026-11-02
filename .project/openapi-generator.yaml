@@ -1,0 +1,11 @@
+# configuration for openapitools/openapi-generator-cli
+generatorName: php
+inputSpec: /local/.project/openapi.yaml
+outputDir: /local
+additionalProperties:
+  invokerPackage: In2code\In2DzgStudyDatabase
+  composerPackageName: in2code/in2dzg_studydatabase_sdk
+  artifactVersion: 1.0.0
+  licenseName: GPL-2.0
+  variableNamingConvention: camelCase
+  hideGenerationTimestamp: true
