@@ -1,0 +1,9 @@
+# ListStudyCategoriesOrderingsParameter
+
+## Properties
+
+Name | Type | Description | Notes
+------------ | ------------- | ------------- | -------------
+**title** | [**\In2code\In2DzgStudyDatabase\Model\OrderingDirection**](OrderingDirection.md) |  | [optional]
+
+[[Back to Model list]](../../README.md#models) [[Back to API list]](../../README.md#endpoints) [[Back to README]](../../README.md)
